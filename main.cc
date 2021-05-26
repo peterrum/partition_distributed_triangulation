@@ -119,8 +119,8 @@ namespace dealii
       template <int dim, int spacedim>
       Description<dim, spacedim>
       create_description_from_triangulation(
-        const Triangulation<dim, spacedim> &              tria,
-        const LinearAlgebra::distributed::Vector<double> &partition)
+        const parallel::distributed::Triangulation<dim, spacedim> &tria,
+        const LinearAlgebra::distributed::Vector<double> &         partition)
       {
         const auto relevant_processes = [&]() {
           std::set<unsigned int> relevant_processes;
@@ -131,14 +131,6 @@ namespace dealii
           return std::vector<unsigned int>(relevant_processes.begin(),
                                            relevant_processes.end());
         }();
-
-        // 1) collect locally relevant cells (set user_flag)
-        std::vector<bool> old_user_flags;
-        tria.save_user_flags(old_user_flags);
-
-        // 1a) clear user_flags
-        const_cast<dealii::Triangulation<dim, spacedim> &>(tria)
-          .clear_user_flags();
 
         std::map<unsigned int, std::vector<unsigned int>>
                                              coinciding_vertex_groups;
@@ -172,10 +164,18 @@ namespace dealii
 
         for (unsigned int i = 0; i < description_temp.size(); ++i)
           {
+            // 1) collect locally relevant cells (set user_flag)
+            std::vector<bool> old_user_flags;
+            tria.save_user_flags(old_user_flags);
+
+            // 1a) clear user_flags
+            const_cast<
+              dealii::parallel::distributed::Triangulation<dim, spacedim> &>(
+              tria)
+              .clear_user_flags();
+
             const unsigned int proc               = relevant_processes[i];
             auto &             description_temp_i = description_temp[i];
-
-            std::cout << proc << std::endl;
 
             // mark all vertices attached to locally owned cells
             std::vector<bool> vertices_owned_by_locally_owned_cells_on_level(
@@ -233,10 +233,12 @@ namespace dealii
               if (vertices_locally_relevant[i])
                 description_temp_i.coarse_cell_vertices.emplace_back(
                   i, tria.get_vertices()[i]);
-          }
 
-        const_cast<dealii::Triangulation<dim, spacedim> &>(tria)
-          .load_user_flags(old_user_flags);
+            const_cast<
+              dealii::parallel::distributed::Triangulation<dim, spacedim> &>(
+              tria)
+              .load_user_flags(old_user_flags);
+          }
 
         DescriptionTemp<dim, spacedim> description_merged;
         description_merged.cell_infos.resize(tria.n_global_levels());
@@ -383,7 +385,6 @@ namespace dealii
             description_merged.coarse_cell_index_to_coarse_cell_id;
           description.cell_infos = description_merged.cell_infos;
         }
-
 
         return description;
       }
