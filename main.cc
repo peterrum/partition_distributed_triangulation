@@ -1,3 +1,5 @@
+#include <deal.II/base/mpi_consensus_algorithms.h>
+
 #include <deal.II/distributed/tria.h>
 
 #include <deal.II/grid/grid_generator.h>
@@ -238,11 +240,147 @@ namespace dealii
         DescriptionTemp<dim, spacedim> description_merged;
         description_merged.cell_infos.resize(tria.n_global_levels());
 
-        (void)description_temp;
+        dealii::Utilities::MPI::ConsensusAlgorithms::AnonymousProcess<char,
+                                                                      char>
+          process(
+            [&]() { return relevant_processes; },
+            [&](const unsigned int other_rank, std::vector<char> &send_buffer) {
+              const auto ptr = std::find(relevant_processes.begin(),
+                                         relevant_processes.end(),
+                                         other_rank);
+
+              Assert(ptr != relevant_processes.end(), ExcInternalError());
+
+              const auto other_rank_index =
+                std::distance(relevant_processes.begin(), ptr);
+
+              send_buffer =
+                dealii::Utilities::pack(description_temp[other_rank_index],
+                                        false);
+            },
+            [&](const unsigned int &     other_rank,
+                const std::vector<char> &recv_buffer,
+                std::vector<char> &      request_buffer) {
+              (void)other_rank;
+              (void)request_buffer;
+
+              const auto result =
+                dealii::Utilities::unpack<DescriptionTemp<dim, spacedim>>(
+                  recv_buffer, false);
+
+              description_merged.coarse_cells.insert(
+                description_merged.coarse_cells.end(),
+                result.coarse_cells.begin(),
+                result.coarse_cells.end());
+              description_merged.coarse_cell_vertices.insert(
+                description_merged.coarse_cell_vertices.end(),
+                result.coarse_cell_vertices.begin(),
+                result.coarse_cell_vertices.end());
+              description_merged.coarse_cell_index_to_coarse_cell_id.insert(
+                description_merged.coarse_cell_index_to_coarse_cell_id.end(),
+                result.coarse_cell_index_to_coarse_cell_id.begin(),
+                result.coarse_cell_index_to_coarse_cell_id.end());
+
+              for (unsigned int i = 0; i < tria.n_global_levels(); ++i)
+                description_merged.cell_infos[i].insert(
+                  description_merged.cell_infos[i].end(),
+                  result.cell_infos[i].begin(),
+                  result.cell_infos[i].end());
+            });
+
+        dealii::Utilities::MPI::ConsensusAlgorithms::Selector<char, char>(
+          process, tria.get_communicator())
+          .run();
+
+        {
+          {
+            std::vector<std::pair<types::coarse_cell_id, dealii::CellData<dim>>>
+              temp;
+
+            for (unsigned int i = 0; i < description_merged.coarse_cells.size();
+                 ++i)
+              temp.emplace_back(
+                description_merged.coarse_cell_index_to_coarse_cell_id[i],
+                description_merged.coarse_cells[i]);
+
+            std::sort(temp.begin(),
+                      temp.end(),
+                      [](const auto &a, const auto &b) {
+                        return a.first < b.first;
+                      });
+            temp.erase(std::unique(temp.begin(),
+                                   temp.end(),
+                                   [](const auto &a, const auto &b) {
+                                     return a.first == b.first;
+                                   }),
+                       temp.end());
+
+            for (unsigned int i = 0; i < description_merged.coarse_cells.size();
+                 ++i)
+              {
+                description_merged.coarse_cell_index_to_coarse_cell_id[i] =
+                  temp[i].first;
+                description_merged.coarse_cells[i] = temp[i].second;
+              }
+          }
+
+          {
+            std::sort(description_merged.coarse_cell_vertices.begin(),
+                      description_merged.coarse_cell_vertices.end(),
+                      [](const auto &a, const auto &b) {
+                        return a.first < b.first;
+                      });
+            description_merged.coarse_cell_vertices.erase(
+              std::unique(description_merged.coarse_cell_vertices.begin(),
+                          description_merged.coarse_cell_vertices.end(),
+                          [](const auto &a, const auto &b) {
+                            return a.first == b.first;
+                          }),
+              description_merged.coarse_cell_vertices.end());
+          }
+
+          for (unsigned int i = 0; i < tria.n_global_levels(); ++i)
+            {
+              std::sort(description_merged.cell_infos[i].begin(),
+                        description_merged.cell_infos[i].end(),
+                        [](const auto &a, const auto &b) {
+                          return a.id < b.id;
+                        });
+              description_merged.cell_infos[i].erase(
+                std::unique(description_merged.cell_infos[i].begin(),
+                            description_merged.cell_infos[i].end(),
+                            [](const auto &a, const auto &b) {
+                              return a.id == b.id;
+                            }),
+                description_merged.cell_infos[i].end());
+            }
+        }
 
         Description<dim, spacedim> description;
 
-        (void)description_merged;
+        {
+          std::map<unsigned int, unsigned int> map;
+
+          for (unsigned int i = 0;
+               i < description_merged.coarse_cell_vertices.size();
+               ++i)
+            {
+              description.coarse_cell_vertices.push_back(
+                description_merged.coarse_cell_vertices[i].second);
+              map[description_merged.coarse_cell_vertices[i].first] = i;
+            }
+
+          description.coarse_cells = description_merged.coarse_cells;
+
+          for (auto &cell : description.coarse_cells)
+            for (unsigned int v = 0; v < cell.vertices.size(); ++v)
+              cell.vertices[v] = map[cell.vertices[v]];
+
+          description.coarse_cell_index_to_coarse_cell_id =
+            description_merged.coarse_cell_index_to_coarse_cell_id;
+          description.cell_infos = description_merged.cell_infos;
+        }
+
 
         return description;
       }
