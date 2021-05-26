@@ -4,6 +4,7 @@
 #include <deal.II/distributed/tria.h>
 
 #include <deal.II/grid/grid_generator.h>
+#include <deal.II/grid/grid_out.h>
 #include <deal.II/grid/grid_tools.h>
 #include <deal.II/grid/tria_description.h>
 
@@ -50,6 +51,7 @@ main(int argc, char **argv)
 
   parallel::distributed::Triangulation<dim> tria(comm);
   GridGenerator::subdivided_hyper_cube(tria, 4);
+  tria.refine_global(3);
 
   const auto partition_new = partition_distributed_triangulation(tria);
 
@@ -69,6 +71,9 @@ main(int argc, char **argv)
     data_out.add_data_vector(partition_old, "partition_old");
     data_out.build_patches();
     data_out.write_vtu_in_parallel("partition.0.vtu", comm);
+
+    GridOut grid_out;
+    grid_out.write_mesh_per_processor_as_vtu(tria, "grid_old");
   }
 
   const auto construction_data =
@@ -87,5 +92,8 @@ main(int argc, char **argv)
     data_out.add_data_vector(partition_old, "partition_old");
     data_out.build_patches();
     data_out.write_vtu_in_parallel("partition.1.vtu", comm);
+
+    GridOut grid_out;
+    grid_out.write_mesh_per_processor_as_vtu(tria_pft, "grid_new");
   }
 }
