@@ -71,8 +71,10 @@ namespace dealii
 
       template <int dim, int spacedim>
       void
-      fill_cell_infos(const TriaIterator<CellAccessor<dim, spacedim>> &cell,
-                      std::vector<std::vector<CellData<dim>>> &cell_infos)
+      fill_cell_infos(
+        const TriaIterator<CellAccessor<dim, spacedim>> & cell,
+        std::vector<std::vector<CellData<dim>>> &         cell_infos,
+        const LinearAlgebra::distributed::Vector<double> &partition)
       {
         cell->set_user_flag();
 
@@ -107,13 +109,17 @@ namespace dealii
         }
 
         // subdomain and level subdomain id
-        cell_info.subdomain_id       = cell->subdomain_id();
-        cell_info.level_subdomain_id = cell->level_subdomain_id();
+        if (cell->is_active())
+          cell_info.subdomain_id = partition[cell->global_active_cell_index()];
+        else
+          cell_info.subdomain_id = numbers::artificial_subdomain_id;
+
+        cell_info.level_subdomain_id = numbers::artificial_subdomain_id;
 
         cell_infos[cell->level()].emplace_back(cell_info);
 
         if (cell->level() != 0)
-          fill_cell_infos(cell->parent(), cell_infos);
+          fill_cell_infos(cell->parent(), cell_infos, partition);
       }
 
       template <int dim, int spacedim>
@@ -200,7 +206,7 @@ namespace dealii
             // collect locally relevant cells (including their parents)
             for (const auto &cell : tria.active_cell_iterators())
               if (is_locally_relevant_on_level(cell))
-                fill_cell_infos(cell, description_temp_i.cell_infos);
+                fill_cell_infos(cell, description_temp_i.cell_infos, partition);
 
             // collect coarse-grid cells
             std::vector<bool> vertices_locally_relevant(tria.n_vertices(),
@@ -326,8 +332,11 @@ namespace dealii
                         return std::get<2>(a) < std::get<2>(b);
                       });
 
-            for (unsigned int i = 0; i < description_merged.coarse_cells.size();
-                 ++i)
+            description_merged.coarse_cell_index_to_coarse_cell_id.resize(
+              temp.size());
+            description_merged.coarse_cells.resize(temp.size());
+
+            for (unsigned int i = 0; i < temp.size(); ++i)
               {
                 description_merged.coarse_cell_index_to_coarse_cell_id[i] =
                   std::get<0>(temp[i]);
@@ -414,21 +423,23 @@ main(int argc, char **argv)
 
   const auto partition_new = partition_distributed_triangulation(tria);
 
-  Vector<double> partition_new_for_data_out(tria.n_active_cells());
-  for (const auto &cell : tria.active_cell_iterators())
-    if (cell->is_locally_owned())
-      partition_new_for_data_out[cell->active_cell_index()] =
-        partition_new[cell->global_active_cell_index()];
+  {
+    Vector<double> partition_new_for_data_out(tria.n_active_cells());
+    for (const auto &cell : tria.active_cell_iterators())
+      if (cell->is_locally_owned())
+        partition_new_for_data_out[cell->active_cell_index()] =
+          partition_new[cell->global_active_cell_index()];
 
-  Vector<double> partition_old(tria.n_active_cells());
-  partition_old = Utilities::MPI::this_mpi_process(comm);
+    Vector<double> partition_old(tria.n_active_cells());
+    partition_old = Utilities::MPI::this_mpi_process(comm);
 
-  DataOut<dim> data_out;
-  data_out.attach_triangulation(tria);
-  data_out.add_data_vector(partition_new_for_data_out, "partition_new");
-  data_out.add_data_vector(partition_old, "partition_old");
-  data_out.build_patches();
-  data_out.write_vtu_in_parallel("partition.vtu", comm);
+    DataOut<dim> data_out;
+    data_out.attach_triangulation(tria);
+    data_out.add_data_vector(partition_new_for_data_out, "partition_new");
+    data_out.add_data_vector(partition_old, "partition_old");
+    data_out.build_patches();
+    data_out.write_vtu_in_parallel("partition.0.vtu", comm);
+  }
 
   const auto construction_data =
     TriangulationDescription::Utilities::create_description_from_triangulation(
@@ -436,4 +447,15 @@ main(int argc, char **argv)
 
   parallel::fullydistributed::Triangulation<dim> tria_pft(comm);
   tria_pft.create_triangulation(construction_data);
+
+  {
+    Vector<double> partition_old(tria_pft.n_active_cells());
+    partition_old = Utilities::MPI::this_mpi_process(comm);
+
+    DataOut<dim> data_out;
+    data_out.attach_triangulation(tria_pft);
+    data_out.add_data_vector(partition_old, "partition_old");
+    data_out.build_patches();
+    data_out.write_vtu_in_parallel("partition.1.vtu", comm);
+  }
 }
