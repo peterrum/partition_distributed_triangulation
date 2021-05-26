@@ -297,33 +297,41 @@ namespace dealii
 
         {
           {
-            std::vector<std::pair<types::coarse_cell_id, dealii::CellData<dim>>>
+            std::vector<std::tuple<types::coarse_cell_id,
+                                   dealii::CellData<dim>,
+                                   unsigned int>>
               temp;
 
             for (unsigned int i = 0; i < description_merged.coarse_cells.size();
                  ++i)
               temp.emplace_back(
                 description_merged.coarse_cell_index_to_coarse_cell_id[i],
-                description_merged.coarse_cells[i]);
+                description_merged.coarse_cells[i],
+                i);
 
             std::sort(temp.begin(),
                       temp.end(),
                       [](const auto &a, const auto &b) {
-                        return a.first < b.first;
+                        return std::get<0>(a) < std::get<0>(b);
                       });
             temp.erase(std::unique(temp.begin(),
                                    temp.end(),
                                    [](const auto &a, const auto &b) {
-                                     return a.first == b.first;
+                                     return std::get<0>(a) == std::get<0>(b);
                                    }),
                        temp.end());
+            std::sort(temp.begin(),
+                      temp.end(),
+                      [](const auto &a, const auto &b) {
+                        return std::get<2>(a) < std::get<2>(b);
+                      });
 
             for (unsigned int i = 0; i < description_merged.coarse_cells.size();
                  ++i)
               {
                 description_merged.coarse_cell_index_to_coarse_cell_id[i] =
-                  temp[i].first;
-                description_merged.coarse_cells[i] = temp[i].second;
+                  std::get<0>(temp[i]);
+                description_merged.coarse_cells[i] = std::get<1>(temp[i]);
               }
           }
 
