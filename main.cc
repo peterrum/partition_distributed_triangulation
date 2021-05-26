@@ -1,5 +1,6 @@
 #include <deal.II/base/mpi_consensus_algorithms.h>
 
+#include <deal.II/distributed/fully_distributed_tria.h>
 #include <deal.II/distributed/tria.h>
 
 #include <deal.II/grid/grid_generator.h>
@@ -359,6 +360,8 @@ namespace dealii
         Description<dim, spacedim> description;
 
         {
+          description.comm = tria.get_communicator();
+
           std::map<unsigned int, unsigned int> map;
 
           for (unsigned int i = 0;
@@ -394,9 +397,10 @@ main(int argc, char **argv)
 {
   Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
 
-  const unsigned int dim = 2;
+  const unsigned int dim  = 2;
+  const MPI_Comm     comm = MPI_COMM_WORLD;
 
-  parallel::distributed::Triangulation<dim> tria(MPI_COMM_WORLD);
+  parallel::distributed::Triangulation<dim> tria(comm);
   GridGenerator::subdivided_hyper_cube(tria, 4);
 
   const auto partition_new = partition_distributed_triangulation(tria);
@@ -408,16 +412,19 @@ main(int argc, char **argv)
         partition_new[cell->global_active_cell_index()];
 
   Vector<double> partition_old(tria.n_active_cells());
-  partition_old = Utilities::MPI::this_mpi_process(MPI_COMM_WORLD);
+  partition_old = Utilities::MPI::this_mpi_process(comm);
 
   DataOut<dim> data_out;
   data_out.attach_triangulation(tria);
   data_out.add_data_vector(partition_new_for_data_out, "partition_new");
   data_out.add_data_vector(partition_old, "partition_old");
   data_out.build_patches();
-  data_out.write_vtu_in_parallel("partition.vtu", MPI_COMM_WORLD);
+  data_out.write_vtu_in_parallel("partition.vtu", comm);
 
-  const auto description =
+  const auto construction_data =
     TriangulationDescription::Utilities::create_description_from_triangulation(
       tria, partition_new);
+
+  parallel::fullydistributed::Triangulation<dim> tria_pft(comm);
+  tria_pft.create_triangulation(construction_data);
 }
