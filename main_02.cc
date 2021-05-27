@@ -24,7 +24,7 @@ partition_distributed_triangulation(
   const Triangulation<dim, spacedim> &tria_fine,
   const Triangulation<dim, spacedim> &tria_coarse_in)
 {
-  FirstChildPolicy<dim, spacedim> policy(tria_fine);
+  RepartitioningPolicyTools::FirstChildPolicy<dim, spacedim> policy(tria_fine);
   return policy.partition(tria_coarse_in);
 }
 

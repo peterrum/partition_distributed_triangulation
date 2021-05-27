@@ -87,11 +87,13 @@ main(int argc, char **argv)
   };
 
   // default policy (simply copy p:d:T)
-  test(DefaultPolicy<dim>(), "grid_policy_default");
+  test(RepartitioningPolicyTools::DefaultPolicy<dim>(), "grid_policy_default");
 
   // first-child policy
-  test(FirstChildPolicy<dim>(tria), "grid_policy_first");
+  test(RepartitioningPolicyTools::FirstChildPolicy<dim>(tria),
+       "grid_policy_first");
 
   // first-child policy
-  test(MinimalGranularityPolicy<dim>(4), "grid_policy_minimal");
+  test(RepartitioningPolicyTools::MinimalGranularityPolicy<dim>(4),
+       "grid_policy_minimal");
 }
