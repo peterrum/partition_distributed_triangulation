@@ -52,6 +52,69 @@ add_indices(const TriaIterator<CellAccessor<dim, spacedim>> &cell,
 }
 
 
+template <int dim, int spacedim>
+class FirstChildPolicy
+{
+public:
+  FirstChildPolicy(const Triangulation<dim, spacedim> &tria_fine)
+    : cell_id_translator(n_coarse_cells(tria_fine), n_global_levels(tria_fine))
+    , is_fine(cell_id_translator.size())
+  {
+    for (const auto &cell : tria_fine.active_cell_iterators())
+      if (cell->is_locally_owned())
+        add_indices(cell, cell_id_translator, is_fine);
+  }
+
+  LinearAlgebra::distributed::Vector<double>
+  partition(const Triangulation<dim, spacedim> &tria_coarse_in)
+  {
+    const auto communicator = tria_coarse_in.get_communicator();
+
+    IndexSet is_coarse(cell_id_translator.size());
+
+    for (const auto &cell : tria_coarse_in.active_cell_iterators())
+      if (cell->is_locally_owned())
+        is_coarse.add_index(cell_id_translator.translate(cell));
+
+    std::vector<unsigned int> owning_ranks_of_ghosts(is_coarse.n_elements());
+    {
+      Utilities::MPI::internal::ComputeIndexOwner::ConsensusAlgorithmsPayload
+        process(
+          is_fine, is_coarse, communicator, owning_ranks_of_ghosts, false);
+
+      Utilities::MPI::ConsensusAlgorithms::Selector<
+        std::pair<types::global_cell_index, types::global_cell_index>,
+        unsigned int>
+        consensus_algorithm(process, communicator);
+      consensus_algorithm.run();
+    }
+
+    const auto tria =
+      dynamic_cast<const parallel::TriangulationBase<dim, spacedim> *>(
+        &tria_coarse_in);
+
+    Assert(tria, ExcNotImplemented());
+
+    LinearAlgebra::distributed::Vector<double> partition(
+      tria->global_active_cell_index_partitioner().lock());
+
+    for (const auto &cell : tria_coarse_in.active_cell_iterators())
+      if (cell->is_locally_owned())
+        partition[cell->global_active_cell_index()] =
+          owning_ranks_of_ghosts[is_coarse.index_within_set(
+            cell_id_translator.translate(cell))];
+
+    partition.update_ghost_values();
+
+    return partition;
+  }
+
+private:
+  const internal::CellIDTranslator<dim> cell_id_translator;
+  IndexSet                              is_fine;
+};
+
+
 
 template <int dim, int spacedim>
 LinearAlgebra::distributed::Vector<double>
@@ -59,52 +122,8 @@ partition_distributed_triangulation(
   const Triangulation<dim, spacedim> &tria_fine,
   const Triangulation<dim, spacedim> &tria_coarse_in)
 {
-  const auto communicator = tria_coarse_in.get_communicator();
-
-  const internal::CellIDTranslator<dim> cell_id_translator(
-    n_coarse_cells(tria_fine), n_global_levels(tria_fine));
-
-  IndexSet is_fine(cell_id_translator.size());
-  IndexSet is_coarse(cell_id_translator.size());
-
-  for (const auto &cell : tria_fine.active_cell_iterators())
-    if (cell->is_locally_owned())
-      add_indices(cell, cell_id_translator, is_fine);
-
-  for (const auto &cell : tria_coarse_in.active_cell_iterators())
-    if (cell->is_locally_owned())
-      is_coarse.add_index(cell_id_translator.translate(cell));
-
-  std::vector<unsigned int> owning_ranks_of_ghosts(is_coarse.n_elements());
-  {
-    Utilities::MPI::internal::ComputeIndexOwner::ConsensusAlgorithmsPayload
-      process(is_fine, is_coarse, communicator, owning_ranks_of_ghosts, false);
-
-    Utilities::MPI::ConsensusAlgorithms::Selector<
-      std::pair<types::global_cell_index, types::global_cell_index>,
-      unsigned int>
-      consensus_algorithm(process, communicator);
-    consensus_algorithm.run();
-  }
-
-  const auto tria =
-    dynamic_cast<const parallel::TriangulationBase<dim, spacedim> *>(
-      &tria_coarse_in);
-
-  Assert(tria, ExcNotImplemented());
-
-  LinearAlgebra::distributed::Vector<double> partition(
-    tria->global_active_cell_index_partitioner().lock());
-
-  for (const auto &cell : tria_coarse_in.active_cell_iterators())
-    if (cell->is_locally_owned())
-      partition[cell->global_active_cell_index()] =
-        owning_ranks_of_ghosts[is_coarse.index_within_set(
-          cell_id_translator.translate(cell))];
-
-  partition.update_ghost_values();
-
-  return partition;
+  FirstChildPolicy<dim, spacedim> policy(tria_fine);
+  return policy.partition(tria_coarse_in);
 }
 
 
@@ -121,7 +140,7 @@ main(int argc, char **argv)
 
   const auto create_fine_mesh = [](auto &tria) {
     const unsigned int n_ref_global = 3;
-    const unsigned int n_ref_local  = 1;
+    const unsigned int n_ref_local  = 3;
     GridGenerator::hyper_cube(tria, -1.0, +1.0);
     tria.refine_global(n_ref_global);
 
