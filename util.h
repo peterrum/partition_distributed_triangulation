@@ -45,6 +45,19 @@ public:
 };
 
 template <int dim, int spacedim = dim>
+class DefaultPolicy : public Base<dim, spacedim>
+{
+public:
+  virtual LinearAlgebra::distributed::Vector<double>
+  partition(const Triangulation<dim, spacedim> &tria_coarse_in) const override
+  {
+    (void)tria_coarse_in; // nothing to do
+
+    return {};
+  }
+};
+
+template <int dim, int spacedim = dim>
 class FirstChildPolicy : public Base<dim, spacedim>
 {
 public:
@@ -106,6 +119,56 @@ private:
   IndexSet                              is_fine;
 };
 
+template <int dim, int spacedim = dim>
+class MinimalGranularityPolicy : public Base<dim, spacedim>
+{
+public:
+  MinimalGranularityPolicy(const unsigned int n_min_cells)
+    : n_min_cells(n_min_cells)
+  {}
+
+  virtual LinearAlgebra::distributed::Vector<double>
+  partition(const Triangulation<dim, spacedim> &tria_in) const override
+  {
+    const auto tria =
+      dynamic_cast<const parallel::TriangulationBase<dim, spacedim> *>(
+        &tria_in);
+
+    Assert(tria, ExcNotImplemented());
+
+    LinearAlgebra::distributed::Vector<double> partition(
+      tria->global_active_cell_index_partitioner().lock());
+
+    unsigned int n_locally_owned_active_cells = 0;
+    for (const auto &cell : tria_in.active_cell_iterators())
+      if (cell->is_locally_owned())
+        ++n_locally_owned_active_cells;
+
+    if (Utilities::MPI::min(n_locally_owned_active_cells,
+                            tria_in.get_communicator()) > n_min_cells)
+      return {};
+
+    const unsigned int n_global_active_cells = tria_in.n_global_active_cells();
+
+    const unsigned int n_partitions =
+      std::min(n_global_active_cells / n_min_cells + 1,
+               Utilities::MPI::n_mpi_processes(tria_in.get_communicator()));
+
+    for (const auto &cell : tria_in.active_cell_iterators())
+      if (cell->is_locally_owned())
+        partition[cell->global_active_cell_index()] =
+          cell->global_active_cell_index() * n_partitions /
+          n_global_active_cells;
+
+    partition.update_ghost_values();
+
+    return partition;
+  }
+
+private:
+  const unsigned int n_min_cells;
+};
+
 namespace dealii
 {
   namespace MGTransferGlobalCoarseningTools
@@ -158,6 +221,8 @@ namespace dealii
           const auto comm      = temp_tria.get_communicator();
           const auto partition = policy.partition(temp_tria);
 
+          partition.update_ghost_values();
+
           const auto construction_data =
             partition.size() == 0 ?
               TriangulationDescription::Utilities::
@@ -172,6 +237,8 @@ namespace dealii
 
           // save mesh
           coarse_grid_triangulations[l - 1] = new_tria;
+
+          MPI_Barrier(MPI_COMM_WORLD);
         }
 #endif
 
